@@ -81,7 +81,7 @@ def get_model(args,name,pth):
             args.image_size=[384,384]
             args.resize=args.image_size
         model= torch.hub.load("amaralibey/bag-of-queries", "get_trained_boq", backbone_name=args.backbone.lower(), output_dim=args.descriptors_dimension)
-        model.cuda()
+        
         args.features_dim=args.descriptors_dimension
         
 

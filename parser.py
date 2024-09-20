@@ -18,7 +18,7 @@ def parse_arguments(arguments=[]):
                         help="amount of database images to rerank default 100.")
     parser.add_argument("--batch_size", type=int, default=16,
                         help="set to 1 if database images may have different resolution")
-    parser.add_argument("--n_features", type=int, default=None,
+    parser.add_argument("--n_features", type=int, default=100,
                         help="amount of features to save for each query for each method, default uses all features")
     parser.add_argument("--fuse_method", type=str, default="avg",
                         help="Select which method to use for combining the different models, avg for average of all L2 distances, SUE-avg for SUE weighted L2 distances, SUE-max for most confident method only", choices=["avg","SUE-avg","SUE-max"])

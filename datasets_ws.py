@@ -82,6 +82,9 @@ class BaseDataset_normal(data.Dataset):
         self.dataset_name = dataset_name
         self.dataset_folder = join(datasets_folder, dataset_name, split)
         if not os.path.exists(self.dataset_folder):
+            self.dataset_folder=join(datasets_folder, dataset_name,"images",split)
+        
+        if not os.path.exists(self.dataset_folder):
             raise FileNotFoundError(f"Folder {self.dataset_folder} does not exist")
         
         #### Read paths and UTM coordinates for all images.
@@ -92,7 +95,22 @@ class BaseDataset_normal(data.Dataset):
         if not os.path.exists(queries_folder):
             raise FileNotFoundError(f"Folder {queries_folder} does not exist")
         self.database_paths = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
-        self.queries_paths = sorted(glob(join(queries_folder, "**", "*.jpg"),  recursive=True))
+        
+        #the msls dataset contains more query images than the msls val test split used for most papers
+        if dataset_name="msls":
+            val_queries=[]
+            with open("/scratch/mzaffar/olaf/MSLS-val/key_mslsval.txt") as f:
+                val_queries = list(f)[0]
+            all_queries_paths = sorted(glob(join(queries_folder, "**", "*.jpg"),  recursive=True))
+            self.queries_paths=[]
+            
+
+            for query_path in all_queries_paths:
+                pano_id= query_path.split('@')[7]
+            #     print(pano_id)
+                if pano_id in val_queries:
+                    self.queries_paths.append(query_path)
+                    
         # The format must be path/to/file/@utm_easting@utm_northing@...@.jpg
         self.database_utms = np.array([(path.split("@")[1], path.split("@")[2]) for path in self.database_paths]).astype(float)
         self.queries_utms = np.array([(path.split("@")[1], path.split("@")[2]) for path in self.queries_paths]).astype(float)
@@ -112,6 +130,8 @@ class BaseDataset_normal(data.Dataset):
         
         self.database_num = len(self.database_paths)
         self.queries_num = len(self.queries_paths)
+        args.database_num=self.database_num
+        args.queries_num=self.queries_num
     
     def __getitem__(self, index):
         img = path_to_pil_img(self.images_paths[index])
