@@ -8,44 +8,62 @@ def parse_arguments(arguments=[]):
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     
-    parser.add_argument("--datasets_folder", type=str, required=True,
+    parser.add_argument("--datasets_folder", type=str, default="datasets_vg/datasets",
                         help="path/to/datsets")
     parser.add_argument("--dataset_name", type=str, required=True,
                         help="...")
-    parser.add_argument("--num_workers", type=int, default=8,
+    parser.add_argument("--method",type=str,default="crica",
+                        help="name of the method to use",choices=["sela","boq","crica"])
+    parser.add_argument("--num_workers", type=int, default=6,
                         help="_")
-    parser.add_argument("--rerank_num", type=int, default=100,
-                        help="amount of database images to rerank default 100.")
-    parser.add_argument("--batch_size", type=int, default=16,
+    parser.add_argument("--train_batch_size", type=int, default=25,
                         help="set to 1 if database images may have different resolution")
-    parser.add_argument("--n_features", type=int, default=100,
-                        help="amount of features to save for each query for each method, default uses all features")
-    parser.add_argument("--fuse_method", type=str, default="avg",
-                        help="Select which method to use for combining the different models, avg for average of all L2 distances, SUE-avg for SUE weighted L2 distances, SUE-max for most confident method only", choices=["avg","SUE-avg","SUE-max"])
-    parser.add_argument("--log_dir", type=str, default="default",
+    parser.add_argument("--infer_batch_size",type=int,default=16,
+                        help="set to 1 if database images may have different resolution")
+    parser.add_argument("--mining",default="full",choices=["full","partial","random"],
+                        help="select triplet mining strategy")
+    parser.add_argument("--lr",type=float, default=1e-7,
+                        help="learning rate to fine-tune the model with")
+    parser.add_argument("--margin", type=float, default=0.1,
+                        help="margin for the triplet loss")
+    parser.add_argument("--criterion", type=str, default='triplet', help='loss to be used',
+                        choices=["triplet", "sare_ind", "sare_joint"])
+    parser.add_argument("--optim", type=str, default="adam", help="_", choices=["adam", "sgd"])
+    parser.add_argument("--negs_num_per_query",type=int, default=2,
+                        help="Number of negives to use in use triplet")
+    parser.add_argument("--epochs_num",type=int,default=100,help="_")
+    
+    parser.add_argument("--resume",type=str,default="weights/gsv_crica.pth",
+                        help="Currently not used, neeeds to be defined to create sublog folder to store results")
+    parser.add_argument("--queries_per_epoch",type=int,default=-1,
+                        help="How much queries to use per epoch, if set to -1, the whole reference database will be used each epoch")
+    parser.add_argument("--patience",type=int,default=0,
+                        help="Early stopping patience, stop after so much epochs without improvement of R@1 for the validation set (NOT IMPLEMENTED)")
+    parser.add_argument('--test_method', type=str, default="hard_resize",
+                        choices=["hard_resize", "single_query", "central_crop", "five_crops", "nearest_crop", "maj_voting"],
+                        help="This includes pre/post-processing methods and prediction refinement")
+    parser.add_argument("--augments",type=bool,default=True, 
+                        help="Set to True to use augmentation during training on queries, also on the validation set" )
+    parser.add_argument("--log_dir", type=str, default="logs",
                         help="experiment name, output logs will be saved under logs/log_dir")
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"],
                         help="_")
-    parser.add_argument("--method_pths", type=str, nargs="+", default=None, help="use this if finetuned models should be used")
-    
-    parser.add_argument("--methods", type=str, nargs="+", default=None, help="use this if youre lazy and what one finetuned model of each method", choices=["boq", "sela", "crica"])
-    
-    parser.add_argument("--method_folder", type=str, default="weights", required=True,
-                        help="Place where the state dicts are stored")
-    parser.add_argument("--gpu_id",type=str, default="0", help="Cuda visible devices")
-    parser.add_argument("--pca", type=bool, default=False, help="True if you want to use smaller descriptor dimensions")
+    parser.add_argument("--gpu_id",type=str, default="0", help="Edit which CUDA GPU is visible, only applicable if device == cuda")
+    parser.add_argument("--pca", action="store_true", help="True if you want to use smaller descriptor dimensions")
     parser.add_argument("--pca_folder",type=str, default=None, help="If you have saved pca's for the methods enter the folder where these are saved.")
     
     
     
-    parser.add_argument("--positive_dist_threshold", type=int, default=25,
-                        help="distance (in meters) for a prediction to be considered a positive")
+    parser.add_argument("--val_positive_dist_threshold", type=int, default=25, help="_")
+    parser.add_argument("--train_positives_dist_threshold", type=int, default=10, help="_")
     
     parser.add_argument("--backbone", type=str, default=None,
                         choices=[None, "VGG16", "ResNet18", "ResNet50", "ResNet101", "ResNet152"],
                         help="_")
-    parser.add_argument("--registers", type=bool, default=False,
-                        help="_")
+    parser.add_argument("--registers", action='store_true', help="Required args variable to initiate the SelaVPR model")
+                        
+    parser.add_argument("--rerank_num", type=int, default=100,
+                        help="amount of database images to rerank default 100.")
     
     parser.add_argument("--descriptors_dimension", type=int, default=None,
                         help="_")
@@ -58,9 +76,11 @@ def parse_arguments(arguments=[]):
     parser.add_argument("--no_labels", action="store_true",
                         help="set to true if you have no labels and just want to "
                         "do standard image retrieval given two folders of queries and DB")
-    parser.add_argument("--image_size", type=int, default=None, nargs="+",
-                        help="Resizing shape for images (HxW). If a single int is passed, set the"
-                        "smallest edge of all images to this value, while keeping aspect ratio")
+    parser.add_argument("--resize", type=int, default=None, nargs="+",
+                        help="Only touch if you really want to, if None the correct size for the model is selected")
+    parser.add_argument("--efficient_ram_testing", action='store_true', help="_")
+    parser.add_argument("--neg_samples_num", type=int, default=1000,
+                        help="How many negatives to use to compute the hardest ones")
     
     
     if len(arguments)>0:
@@ -71,3 +91,16 @@ def parse_arguments(arguments=[]):
         
     return args
     
+# include for SUE ENSAMBLE
+
+#     parser.add_argument("--n_features", type=int, default=100,
+#                         help="amount of features to save for each query for each method, default uses all features")
+#     parser.add_argument("--fuse_method", type=str, default="avg",
+#                         help="Select which method to use for combining the different models, avg for average of all L2 distances, SUE-avg for SUE weighted L2 distances, SUE-max for most confident method only", choices=["avg","SUE-avg","SUE-max"])
+
+#     parser.add_argument("--method_pths", type=str, nargs="+", default=None, help="use this if finetuned models should be used")
+    
+#     parser.add_argument("--methods", type=str, nargs="+", default=None, help="use this if youre lazy and what one finetuned model of each method", choices=["boq", "sela", "crica"])
+    
+#     parser.add_argument("--method_folder", type=str, default="weights", required=True,
+#                         help="Place where the state dicts are stored")
