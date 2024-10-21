@@ -128,7 +128,7 @@ def test_efficient_ram_usage(args, eval_ds, model, test_method="hard_resize"):
 
 def val(args, eval_ds, model, test_method="hard_resize", pca=None):
     
-    torch.manual_seed(42)
+    torch.manual_seed(args.seed)
     """Compute features of the given dataset and compute the recalls."""
     
     assert test_method in ["hard_resize", "single_query", "central_crop", "five_crops",

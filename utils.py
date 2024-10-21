@@ -96,6 +96,7 @@ def get_model(args,name,pth):
         
     return model,rerank
 
+        
 class boq_output_only_model():
     def __init__(self,model):
         self.model=model
@@ -121,6 +122,9 @@ class boq_output_only_model():
     
     def state_dict(self):
         return self.model.state_dict()
+
+    def named_parameters(self):
+        return self.model.named_parameters()
     
     def output_only(self,imgs):
         output,_ = self.model(imgs)
@@ -129,7 +133,7 @@ class boq_output_only_model():
     def __call__(self,imgs):
         output,_=self.model(imgs)
         return output
-    
+
 
 def combining_methods(imgs):
     perspective=kornia.augmentation.RandomPerspective(p=0.5,keepdim=True)

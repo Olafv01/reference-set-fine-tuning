@@ -16,8 +16,10 @@ def parse_arguments(arguments=[]):
                         help="name of the method to use",choices=["sela","boq","crica"])
     parser.add_argument("--num_workers", type=int, default=6,
                         help="_")
-    parser.add_argument("--train_batch_size", type=int, default=25,
+    parser.add_argument("--train_batch_size", type=int, default=16,
                         help="set to 1 if database images may have different resolution")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="random seed to use")
     parser.add_argument("--infer_batch_size",type=int,default=16,
                         help="set to 1 if database images may have different resolution")
     parser.add_argument("--mining",default="full",choices=["full","partial","random"],
@@ -37,7 +39,7 @@ def parse_arguments(arguments=[]):
                         help="Currently not used, neeeds to be defined to create sublog folder to store results")
     parser.add_argument("--queries_per_epoch",type=int,default=-1,
                         help="How much queries to use per epoch, if set to -1, the whole reference database will be used each epoch")
-    parser.add_argument("--patience",type=int,default=0,
+    parser.add_argument("--patience",type=int,default=5,
                         help="Early stopping patience, stop after so much epochs without improvement of R@1 for the validation set (NOT IMPLEMENTED)")
     parser.add_argument('--test_method', type=str, default="hard_resize",
                         choices=["hard_resize", "single_query", "central_crop", "five_crops", "nearest_crop", "maj_voting"],
