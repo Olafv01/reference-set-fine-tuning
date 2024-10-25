@@ -78,9 +78,25 @@ class RefDataset(data.Dataset):
             database_indices=list(~indices)
             paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.queries_paths = list(compress( paths,query_indices))
+            self.database_paths = paths
+            
+        elif val and indices.all()!=None and dataset_name=="nordland":
+            print(f"Using part of the Nordland queries for evaluation to prove the fine tuning we designed")
+            queries_folder= join(self.dataset_folder, "queries")
+            if not os.path.exists(queries_folder):
+                raise FileNotFoundError(f"Folder {queries_folder} does not exist")
+            
+            
+            query_indices=list(indices)
+            
+            paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
+            queries_paths=sorted(glob(join(queries_folder,"**","*.jpg"),recursive=True)) 
+            self.queries_paths = list(compress( queries_paths,query_indices))
             self.database_paths =paths
+            
         elif val and indices.all()!=None and dataset_name!="amstertime" and dataset_name!="sped":
             print(f"using val and indices for other")
+            
             query_indices=list(indices)
             database_indices=list(~indices)
             paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
@@ -648,7 +664,7 @@ class TripletsDataset_rerank(RefDataset):
 class MSLRefs_dataset(data.Dataset):
     """Dataset with images from reference database, can be used to train the model using the Multi similarity loss.
     """
-    def __init__(self,args, datasets_folder="datasets", dataset_name="pitts30k", split="train",,ref_query_split=0.1,indices=None,val=True,batch_size=1000):
+    def __init__(self,args, datasets_folder="datasets", dataset_name="pitts30k", split="train",ref_query_split=0.1,indices=None,val=True,batch_size=1000):
         super().__init__()
         self.val=val
         self.batch_size=batch_size

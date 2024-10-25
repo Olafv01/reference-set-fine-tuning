@@ -13,7 +13,7 @@ def parse_arguments(arguments=[]):
     parser.add_argument("--dataset_name", type=str, required=True,
                         help="...")
     parser.add_argument("--method",type=str,default="crica",
-                        help="name of the method to use",choices=["sela","boq","crica"])
+                        help="name of the method to use",choices=["salad","sela","boq","crica"])
     parser.add_argument("--num_workers", type=int, default=6,
                         help="_")
     parser.add_argument("--train_batch_size", type=int, default=16,

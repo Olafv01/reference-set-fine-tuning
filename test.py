@@ -168,8 +168,7 @@ def val(args, eval_ds, model, test_method="hard_resize", pca=None):
             if test_method == "five_crops" or test_method == "nearest_crop" or test_method == 'maj_voting':
                 inputs = torch.cat(tuple(inputs))  # shape = 5*bs x 3 x 480 x 480
                 
-            if args.augments or eval_ds.dataset_name=="amstertime":
-            
+            if (args.augments or eval_ds.dataset_name=="amstertime") and not eval_ds.dataset_name=="nordland":
                 inputs=combining_methods(inputs)
             
             features = model(inputs.to(args.device))
