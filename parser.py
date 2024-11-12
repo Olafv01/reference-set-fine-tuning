@@ -46,6 +46,15 @@ def parse_arguments(arguments=[]):
                         help="This includes pre/post-processing methods and prediction refinement")
     parser.add_argument("--augments",type=bool,default=True, 
                         help="Set to True to use augmentation during training on queries, also on the validation set" )
+    parser.add_argument("--create_augments",type=bool,default=False, 
+                        help="Set to True to create augmented images for validation and save them " )
+    
+    parser.add_argument("--use_val_augments",type=bool,default=False, 
+                        help="Set to True to use augmented images save in val_save_dir, when you have created them" )
+    
+    parser.add_argument("--val_save_dir", type=str, default="/home/osverburg/validation",
+                        help="place where to save augmented images.")
+    
     parser.add_argument("--log_dir", type=str, default="logs",
                         help="experiment name, output logs will be saved under logs/log_dir")
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"],

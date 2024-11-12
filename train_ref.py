@@ -14,11 +14,12 @@ import pandas as pd
 import json
 import uuid
 import os
+
 import torch
 from glob import glob
 from tqdm import tqdm
 import logging
-from os.path import join
+from os.path import join, exists
 from IPython.display import clear_output
 import SelaVPR.test as sela_test
 from SelaVPR.local_matching import local_sim
@@ -66,13 +67,14 @@ else:
     logging.info(f"no gpu defined, using the first available gpu")
     
 args.is_trainref = False
+
 np.random.seed(args.seed)
+torch.manual_seed(args.seed)
+
 args.ckpnt_path=None
 
 args.train_backbone="original with model.eval"
 args.train_aggregator= True
-import sys
-sys.path.insert(1,"/scratch/mzaffar/olaf/VPR-methods-evaluation//")
 
 if args.method=="sela":
     import vpr_models.SelaVPR
@@ -81,6 +83,9 @@ if args.method=="sela":
     args.image_size=[224,224]
     args.features_dim=1024
     args.foundation_model_path=None
+    model=network.GeoLocalizationNet(args)
+    model = model.to(args.device)
+    
     rerank , model= vpr_models.SelaVPR.get_model(args)
     model.cuda()
 
@@ -96,8 +101,6 @@ if args.method=="sela":
         logging.info("No new state defined")
         
 elif args.method=="boq":
-    
-    from vpr_models import get_model
     if args.backbone not in [None, "DINOv2","ResNet50"]:
         raise ValueError("When using BOQ the backbone must be None or resnet50 or Dinov2")
     if args.backbone is None:
@@ -108,7 +111,11 @@ elif args.method=="boq":
     elif args.backbone.lower() == "resnet50":
         args.descriptors_dimension=16384
         args.image_size=[384,384]
-    model= get_model(args.method, args.backbone, args.descriptors_dimension)
+        
+    model = torch.hub.load("amaralibey/bag-of-queries", "get_trained_boq", backbone_name=args.backbone.lower(), output_dim=args.descriptors_dimension)
+#     for param in model.backbone.named_parameters():
+#         if param[1].requires_grad:
+#             param[1].requires_grad=False
     args.features_dim=args.descriptors_dimension
     
 elif args.method == "crica":
@@ -116,11 +123,18 @@ elif args.method == "crica":
     args.descriptors_dimension = 10752
     model=torch.hub.load("Lu-Feng/CricaVPR", "trained_model")
     args.features_dim=args.descriptors_dimension
+    for name, param in model.module.backbone.named_parameters():
+        if "adapter" not in name:
+            param.requires_grad = False
 elif args.method == "salad":
     args.image_size=[322,322]
     args.descriptors_dimension=8448
     args.features_dim=args.descriptors_dimension
     model = torch.hub.load("serizba/salad", "dinov2_salad")
+    for blk in model.backbone.model.blocks[:-model.backbone.num_trainable_blocks]:
+    #     print(blk)
+        for param in blk.parameters():
+            param.requires_grad=False
 if args.image_size!=None:
     args.resize=args.image_size
    
@@ -191,7 +205,8 @@ else:
     val_ds=datasets_ws.RefDataset(args,datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split='test', indices=val_mask, val=True)
     test_ds=datasets_ws.BaseDataset(args,datasets_folder="datasets_vg/datasets",dataset_name=args.dataset_name,split='test') 
 
-    
+
+
 
 if args.method=="sela":
     logging.info("creating triplets for sela")
@@ -220,6 +235,26 @@ if args.method=="boq":
 
 not_improved_num = 0
 
+if args.create_augments:
+    os.makedirs(join(args.val_save_dir,args.dataset_name),exist_ok=True)
+    queries_subset_ds = Subset(val_ds, list(range(val_ds.database_num, val_ds.database_num+val_ds.queries_num)))
+    queries_dataloader = DataLoader(dataset=queries_subset_ds, num_workers=args.num_workers,
+                                    batch_size=1, pin_memory=(args.device == "cuda"))
+
+    for image,index in tqdm(queries_dataloader):
+        og_im_path= val_ds.images_paths[index]
+        im_name = og_im_path.split("/")[-1]
+
+        new_im_path= join(args.val_save_dir,args.dataset_name,im_name)
+        
+        if exists(new_im_path):
+            continue
+           
+        image=combining_methods(image)[0]
+        
+        image=transforms.functional.to_pil_image(image)
+        image.save(new_im_path)
+    
     
 if 'finetuned' not in args.resume:
     save_dir=join(args.log_dir,args.resume.split(".")[0].split('/')[-1])
@@ -265,6 +300,7 @@ if 'finetuned' not in args.resume:
     test_recalls=[]
     best_epoch_nums=[]
     best_epoch_log_nums=[]
+    
     times_per_epoch=[]
     times_per_loop=[]
     test_recalls.append(test_1)
@@ -385,22 +421,24 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
                 recalls, recalls_str = test.val(args,val_ds, model)
             
             logging.info(f"Final recalls on val set {val_ds}, with reranknum {args.rerank_num}: {recalls_str}")
-
-            logging.info(f"Finetuned:  best R@5 = {best_r5:.1f}, current R@5 = {(recalls[1]):.1f}, not improved for {not_improved_num+int(recalls[1]>best_r5)}")
+            prev_best=best_r5
             
+            is_best=recalls[1]>best_r5
             if not args.early_stopping:
-                if (recalls[1]>best_r5 or epoch_num==args.epochs_num-1):
+                if (is_best or epoch_num==args.epochs_num-1):
                     logging.info(f"Best model saved, will now test on test set for validation")
                     best_r5=recalls[1]
                     best_epoch_num=epoch_num
                     best_epoch_log_num= i * args.train_batch_size/args.log_frequency
+                    
                     not_improved_num = 0
+                    
                 else:
                     if epoch_num>args.early_stopping_epoch:
                         args.early_stopping_epoch=epoch_num
                         not_improved_num+=1
 
-
+            logging.info(f"Finetuned:  best R@5 = {prev_best:.1f}, current R@5 = {(recalls[1]):.1f}, not improved for {not_improved_num}")
             
             if args.method=="sela":
                 test_best, test_str = sela_test.vervang_vooreigen(args, test_ds, model)
@@ -427,12 +465,29 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
             log_path = join(save_dir, "logfile"+filename)
             state_log={"epoch_num":epoch_num, "losses":losses,"lr":args.lr, "args":args,"recalls":all_recalls,"test_set_recalls":test_recalls,"best_epoch":best_epoch_nums, "times_per_epoch":times_per_epoch, "times_per_loop":times_per_loop}
 
-            torch.save(state_log, log_path)
+            try:
+                torch.save(state_log, log_path)
+            except:
+                print(f'error during saving {log_path}, will try again next loop')
+            
 
             model_path=join(save_dir, filename)
             model_state={"epoch_num": epoch_num,"best_epoch":best_epoch_num, "model_state_dict": model.state_dict(),  "all_losses":losses, "recalls":all_recalls, "test_set_recalls":test_recalls, "best_epoch":best_epoch_nums, "times_per_epoch":times_per_epoch, "times_per_loop":times_per_loop}
 
-            torch.save(model_state, model_path)
+            try:
+                torch.save(model_state, model_path)
+            except:
+                print(f'error during saving {model_path}, will try again next loop')
+            
+            best_model_path = join(save_dir, "best_model_"+filename)
+            if is_best and not args.early_stopping:
+                try:
+                    torch.save(model_state, best_model_path)
+                except:
+                    print(f'error during saving {model_path}, will try again next loop')
+                
+                
+                
 
             if not_improved_num>args.patience:
                 args.early_stopping=True

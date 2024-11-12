@@ -128,7 +128,6 @@ def test_efficient_ram_usage(args, eval_ds, model, test_method="hard_resize"):
 
 def val(args, eval_ds, model, test_method="hard_resize", pca=None):
     
-    torch.manual_seed(args.seed)
     """Compute features of the given dataset and compute the recalls."""
     
     assert test_method in ["hard_resize", "single_query", "central_crop", "five_crops",
@@ -168,7 +167,7 @@ def val(args, eval_ds, model, test_method="hard_resize", pca=None):
             if test_method == "five_crops" or test_method == "nearest_crop" or test_method == 'maj_voting':
                 inputs = torch.cat(tuple(inputs))  # shape = 5*bs x 3 x 480 x 480
                 
-            if (args.augments or eval_ds.dataset_name=="amstertime") and not eval_ds.dataset_name=="nordland":
+            if (args.augments or eval_ds.dataset_name=="amstertime") and not eval_ds.dataset_name=="nordland" and not args.use_val_augments:
                 inputs=combining_methods(inputs)
             
             features = model(inputs.to(args.device))
@@ -247,7 +246,7 @@ def val(args, eval_ds, model, test_method="hard_resize", pca=None):
     # Divide by the number of queries*100, so the recalls are in percentages
     recalls = recalls / eval_ds.queries_num * 100
     recalls_str = ", ".join([f"R@{val}: {rec:.1f}" for val, rec in zip(args.recall_values, recalls)])
-    torch.manual_seed(torch.seed())
+    
     return recalls, recalls_str
 
 def test(args, eval_ds, model, test_method="hard_resize", pca=None):

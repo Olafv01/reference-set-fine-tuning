@@ -19,6 +19,9 @@ base_transform = T.Compose([
     T.ToTensor(),
     T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
+val_augment_transform = T.Compose([
+    T.ToTensor(),
+])
 
 def path_to_pil_img(path):
     return Image.open(path).convert("RGB")
@@ -54,8 +57,13 @@ class RefDataset(data.Dataset):
     def __init__(self,args, datasets_folder="datasets", dataset_name="pitts30k", split="train",ref_query_split=0.1,indices=None,val=True):
         super().__init__()
         self.val=val
+        if val:
+            self.use_val_augments=args.use_val_augments
+        else:
+            self.use_val_augments=False
+            
         args.triplets=False
-        np.random.seed(args.seed)
+        
         self.dataset_name = dataset_name
         self.dataset_folder = join(datasets_folder, dataset_name, split)
         if not os.path.exists(self.dataset_folder):
@@ -72,10 +80,33 @@ class RefDataset(data.Dataset):
             raise FileNotFoundError(f"Folder {database_folder} does not exist")
            
 #         print(val,indices)
-        if val and indices.all()!=None and (dataset_name=="amstertime" or dataset_name=="sped"):
+        if args.create_augments:
+            print("used for creating augmented images")
+            paths = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
+            self.queries_paths= paths
+            self.database_paths = paths
+        elif val and args.use_val_augments and dataset_name !="nordland":
+            assert os.path.exists(join(args.val_save_dir,args.dataset_name)), f" no augmented versions found for this dataset"
+            
+            if val and indices.all()!=None and (dataset_name=="amstertime" or dataset_name=="sped"):
+                print(f"using val and indices for small datasets")
+                query_indices=list(indices)
+                query_paths= sorted(glob(join(args.val_save_dir,args.dataset_name, "**", "*.jpg"), recursive=True))
+                print(f"{len(query_paths)} queries found augmented")
+                paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
+                self.queries_paths = list(compress( query_paths,query_indices))
+                self.database_paths = paths
+            else:
+                query_indices=list(indices)
+                
+                query_paths= sorted(glob(join(args.val_save_dir,args.dataset_name, "**", "*.jpg"), recursive=True))
+                print(f"{len(query_paths)} queries found augmented")
+                paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
+                self.queries_paths = list(compress( query_paths,query_indices))
+                self.database_paths = paths
+        elif val and indices.all()!=None and (dataset_name=="amstertime" or dataset_name=="sped"):
             print(f"using val and indices for amstertime")
             query_indices=list(indices)
-            database_indices=list(~indices)
             paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.queries_paths = list(compress( paths,query_indices))
             self.database_paths = paths
@@ -98,10 +129,10 @@ class RefDataset(data.Dataset):
             print(f"using val and indices for other")
             
             query_indices=list(indices)
-            database_indices=list(~indices)
+            
             paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.queries_paths = list(compress( paths,query_indices))
-            self.database_paths =list(compress( paths,database_indices))
+            self.database_paths = paths
             
         elif (not val) and indices.all()!=None:
             print('triplets, with other indices') 
@@ -110,6 +141,7 @@ class RefDataset(data.Dataset):
             self.queries_paths = list(compress( paths,indices))
             self.database_paths = list(compress( paths,indices))
             
+        
         else:
             print('you did not do good')
             self.queries_paths = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
@@ -149,10 +181,16 @@ class RefDataset(data.Dataset):
         self.queries_num = len(self.queries_paths)
     
     def __getitem__(self, index):
+                      
         img = path_to_pil_img(self.images_paths[index])
-        img = base_transform(img)
-        # With database images self.test_method should always be "hard_resize"
-        img = T.functional.resize(img, self.resize,antialias=True)
+        if self.val and self.use_val_augments and index >=len(self.database_paths):
+            img = val_augment_transform(img)
+            img = T.functional.resize(img, self.resize,antialias=True)
+            img.to(torch.float64)
+        else:
+            img = base_transform(img)
+            #With database images self.test_method should always be "hard_resize"
+            img = T.functional.resize(img, self.resize,antialias=True)
         
         return img, index
     
@@ -669,7 +707,6 @@ class MSLRefs_dataset(data.Dataset):
         self.val=val
         self.batch_size=batch_size
         args.triplets=False
-        np.random.seed(args.seed)
         
         self.resize = args.resize
         identity_transform = T.Lambda(lambda x: x)
