@@ -136,39 +136,27 @@ class boq_output_only_model():
 
 
 def combining_methods(imgs):
+        # Kornia data augmentations with probablities from 
+            #M. A. Musallam, V. Gaudillière, and D. Aouada,
+            # “Self-supervised learning for place representation
+            # generalization across appearance changes,” in Pro-
+            # ceedings of the IEEE/CVF Winter Conference on
+            # Applications of Computer Vision, 2024, pp. 7448–
+            # 7458
     perspective=kornia.augmentation.RandomPerspective(p=0.5,keepdim=True)
     planck= kornia.augmentation.RandomPlanckianJitter("blackbody",p=0.8,keepdim=True)
     color_jig=kornia.augmentation.ColorJiggle(p=0.5,keepdim=True)
     bright=kornia.augmentation.RandomPlasmaBrightness(p=0.5,keepdim=True)
-    contrast=kornia.augmentation.RandomPlasmaContrast(p=0.3,keepdim=True)
     grayscl=kornia.augmentation.RandomGrayscale(p=0.3,keepdim=True)
     box=kornia.augmentation.RandomBoxBlur(p=0.5,keepdim=True)
+    contrast=kornia.augmentation.RandomPlasmaContrast(p=0.3,keepdim=True)
     shffle=kornia.augmentation.RandomChannelShuffle(p=0.5,keepdim=True)
     motion_blur=kornia.augmentation.RandomMotionBlur(kernel_size=3, angle=0, direction=1,p=0.3,keepdim=True)
     solar=kornia.augmentation.RandomSolarize(p=0.3,keepdim=True)
+    
     methods=[perspective,planck,color_jig, bright, grayscl, box,contrast, shffle, motion_blur, solar]
     
     for method in methods:
         imgs=method(imgs)
     return imgs
 
-def combining_methods_old(imgs):
-#     print(imgs.device)
-    # current and after # previous p
-    box=kornia.augmentation.RandomBoxBlur(p=0,keepdim=True) # 0.8
-
-    planck= kornia.augmentation.RandomPlanckianJitter("blackbody",p=0.8,keepdim=True) #  0.8
-    color_jig=kornia.augmentation.ColorJiggle(p=0.5,keepdim=True) # 0.5 
-    bright=kornia.augmentation.RandomPlasmaBrightness(p=0.5,keepdim=True)  # 0.3
-    contrast=kornia.augmentation.RandomPlasmaContrast(p=0.3,keepdim=True) # 0.3
-    grayscl=kornia.augmentation.RandomGrayscale(p=1,keepdim=True) # 0.3
-    shffle=kornia.augmentation.RandomChannelShuffle(p=0.5,keepdim=True)  # 0.5
-    solar=kornia.augmentation.RandomSolarize(p=0.2,keepdim=True)  # 0
-    motion_blur=kornia.augmentation.RandomMotionBlur(kernel_size=3, angle=0, direction=1,p=0.3,keepdim=True) #0.3 
-    perspective=kornia.augmentation.RandomPerspective(p=0.5,keepdim=True) # 0.5
-    
-    methods=[box,planck,color_jig,contrast, grayscl, shffle, solar, motion_blur,bright,perspective]
-
-    for method in methods:
-        imgs=method(imgs)
-    return imgs

@@ -3,7 +3,6 @@ import sys
 from SUE_ensamble import test,datasets_ws
 from SUE_ensamble.parser import parse_arguments
 from SUE_ensamble.utils import combining_methods, boq_output_only_model
-sys.path.append("SelaVPR")
 
 from datetime import datetime
 import math
@@ -21,9 +20,6 @@ from tqdm import tqdm
 import logging
 from os.path import join, exists
 from IPython.display import clear_output
-import SelaVPR.test as sela_test
-from SelaVPR.local_matching import local_sim
-from loss import LocalFeatureLoss
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
 import torchvision.transforms as transforms
@@ -60,23 +56,29 @@ if console != None:
     console_handler.setFormatter(base_formatter)
     logger.addHandler(console_handler)
     
+    
 if args.gpu_id !=None:
     os.environ["CUDA_VISIBLE_DEVICES"]=str(args.gpu_id )
     logging.info(f"using GPU with id {args.gpu_id}")
 else:
     logging.info(f"no gpu defined, using the first available gpu")
     
-args.is_trainref = False
-
+#setting random seeds
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 
+# this is a parameter set to True for some
 args.ckpnt_path=None
+args.is_trainref = False
+args.is_best=False
 
-args.train_backbone="original with model.eval"
-args.train_aggregator= True
-
+# Loading models, and setting the settings to fit the predefined model settings, such as feature dim and image size selaVPR relies on both the selavpr git repo and on vpr evaluation git repo
 if args.method=="sela":
+    
+    sys.path.append("SelaVPR")
+    import SelaVPR.test as sela_test
+    from SelaVPR.local_matching import local_sim
+    from loss import LocalFeatureLoss
     import vpr_models.SelaVPR
     from vpr_models import get_model
     args.dense_feature_map_size=[61,61,128]
@@ -113,9 +115,7 @@ elif args.method=="boq":
         args.image_size=[384,384]
         
     model = torch.hub.load("amaralibey/bag-of-queries", "get_trained_boq", backbone_name=args.backbone.lower(), output_dim=args.descriptors_dimension)
-#     for param in model.backbone.named_parameters():
-#         if param[1].requires_grad:
-#             param[1].requires_grad=False
+    
     args.features_dim=args.descriptors_dimension
     
 elif args.method == "crica":
@@ -123,9 +123,11 @@ elif args.method == "crica":
     args.descriptors_dimension = 10752
     model=torch.hub.load("Lu-Feng/CricaVPR", "trained_model")
     args.features_dim=args.descriptors_dimension
+    
     for name, param in model.module.backbone.named_parameters():
         if "adapter" not in name:
             param.requires_grad = False
+            
 elif args.method == "salad":
     args.image_size=[322,322]
     args.descriptors_dimension=8448
@@ -135,12 +137,17 @@ elif args.method == "salad":
     #     print(blk)
         for param in blk.parameters():
             param.requires_grad=False
+            
+
+"""both of these variable need to be set, because some of the loaded models required the image_size variable, while others required resize.   """
+
 if args.image_size!=None:
     args.resize=args.image_size
    
 
 
     
+#if another finetuned file is used, everything is copied and started from a different starting point
 if 'finetuned' in args.resume:
     og_resume=args.resume
     add_epochs=args.epochs_num
@@ -177,7 +184,7 @@ listdata = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
 
 
 
-    
+"""For Nordland dataset, we select the final 10% of test queries to use as validation set"""    
 if args.dataset_name=="nordland":
     train_mask=np.ones(len(listdata),dtype=bool)
     train_mask[:int(0.3*(len(train_mask)))]=False
@@ -190,14 +197,12 @@ if args.dataset_name=="nordland":
     listdata = sorted(glob(join(queries_folder, "**", "*.jpg"), recursive=True))
     mask=np.zeros(len(listdata),dtype=bool)
     mask[int(0.9*(len(mask))):]=True
-#     np.random.shuffle(mask)
+    
     val_ds=datasets_ws.RefDataset(args,datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split='test', indices=mask, val=True)
     test_ds=datasets_ws.RefDataset(args,datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split='test', indices=~mask, val=True)
-#     test_ds=datasets_ws.BaseDataset(args,datasets_folder="datasets_vg/datasets",dataset_name=args.dataset_name,split='test') 
-    
-    
     
 else:
+    ''' For the other datasets, we randomly use 30% of the database images as validation and the rest as train images '''
     train_mask=np.ones(len(listdata),dtype=bool)
     train_mask[:int(0.3*(len(train_mask)))]=False
     np.random.shuffle(train_mask)
@@ -220,8 +225,11 @@ model = model.train()
 
 args.queries_per_epoch=triplets_ds.queries_num if args.queries_per_epoch == -1 else args.queries_per_epoch
 args.cache_refresh_rate=args.queries_per_epoch
-args.log_frequency= 1008 if args.queries_per_epoch >1008 else args.queries_per_epoch
+args.log_frequency= args.log_frequency if args.queries_per_epoch >args.log_frequency else args.queries_per_epoch
+
 assert args.log_frequency / args.train_batch_size == int(args.log_frequency / args.train_batch_size) or args.log_frequency==args.queries_per_epoch, f"log_frequency ({args.log_frequency}) needs to be a multiple of the batch size({args.train_batch_size})"
+
+
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 GlobalTriplet = nn.TripletMarginLoss(margin=args.margin, p=2, reduction="sum")
 
@@ -231,7 +239,7 @@ if args.method == "sela":
 if args.method=="boq":
     model=boq_output_only_model(model)
 
-# args.epochs_num=50
+    
 
 not_improved_num = 0
 
@@ -256,6 +264,10 @@ if args.create_augments:
         image.save(new_im_path)
     
     
+''' If the resume file is not a finetuned model save, but a normal model, we need to evaluate and test the model first, to known the initial performance.
+Also creates the logfile in the format of 
+{model_name}_finetuned_on_{test_dataset}_{learning-rate}_{run_number}.pth''' 
+
 if 'finetuned' not in args.resume:
     save_dir=join(args.log_dir,args.resume.split(".")[0].split('/')[-1])
     filename="{}_finetuned_on_{}_{}_.pth".format(args.resume.split(".")[0].split('/')[-1],args.dataset_name.split("/")[0],str(args.lr))
@@ -326,17 +338,6 @@ logging.info("created triplets with {} mining".format(args.mining))
 
 
 
-# og_params=copy.deepcopy(list(model.named_parameters()))
-# og_dict = copy.deepcopy(model.state_dict())
-# current_params=copy.deepcopy(list(model.named_parameters()))
-
-# for i,param in enumerate(og_params):
-#     assert torch.equal(param[1],current_params[i][1]) , f"wrong param {param[0]}"
-
-# current_model=copy.deepcopy(model.state_dict())
-# for key in og_dict.keys():
-#     if not torch.equal(og_dict[key],current_model[key]):
-#         print(key)
 logging.info(f"Start finetuning")     
 for epoch_num in range(start_epoch_num, args.epochs_num):
     
@@ -361,10 +362,9 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
         # Compute features of all images (images contains queries, positives and negatives)
         if args.method=="sela":
             local_features, global_features = model(images.to(args.device))
-#             elif args.method=="boq":
-#                 global_features,_= model(combining_methods(images.to(args.device)))
         else:
             global_features = model(images.to(args.device))
+            
         total_loss = 0
         global_loss = 0
         local_loss = 0
@@ -423,9 +423,9 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
             logging.info(f"Final recalls on val set {val_ds}, with reranknum {args.rerank_num}: {recalls_str}")
             prev_best=best_r5
             
-            is_best=recalls[1]>best_r5
+            args.is_best=recalls[1]>best_r5
             if not args.early_stopping:
-                if (is_best or epoch_num==args.epochs_num-1):
+                if (args.is_best or epoch_num==args.epochs_num-1):
                     logging.info(f"Best model saved, will now test on test set for validation")
                     best_r5=recalls[1]
                     best_epoch_num=epoch_num
@@ -480,7 +480,7 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
                 print(f'error during saving {model_path}, will try again next loop')
             
             best_model_path = join(save_dir, "best_model_"+filename)
-            if is_best and not args.early_stopping:
+            if args.is_best and not args.early_stopping:
                 try:
                     torch.save(model_state, best_model_path)
                 except:

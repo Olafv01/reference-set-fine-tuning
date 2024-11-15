@@ -106,7 +106,7 @@ def test_efficient_ram_usage(args, eval_ds, model, test_method="hard_resize"):
     
     #### For each query, check if the predictions are correct
     
-    if "is_trainref" in dir(args):
+    if "is_trainref" in args:
         if args.is_trainref:
             np.save("predections_finetune_{}_on_{}".format(args.resume.split(".")[0].split('/')[-1],args.dataset_name.split("/")[0]),predictions)
         else:

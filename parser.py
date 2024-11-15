@@ -34,6 +34,8 @@ def parse_arguments(arguments=[]):
     parser.add_argument("--negs_num_per_query",type=int, default=2,
                         help="Number of negives to use in use triplet")
     parser.add_argument("--epochs_num",type=int,default=100,help="_")
+    parser.add_argument("--log_frequency",type=int,default=1008,
+                        help="amount of triplets to pass before evaluating the model, ")
     
     parser.add_argument("--resume",type=str,default="weights/gsv_crica.pth",
                         help="Currently not used, neeeds to be defined to create sublog folder to store results")

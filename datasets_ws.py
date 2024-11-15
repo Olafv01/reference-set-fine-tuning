@@ -79,78 +79,67 @@ class RefDataset(data.Dataset):
         if not os.path.exists(database_folder):
             raise FileNotFoundError(f"Folder {database_folder} does not exist")
            
-#         print(val,indices)
+        
         if args.create_augments:
+            # if augmented validation images are created all images should be selected for both queries and references,
+            # only the queries are used, but if the database_paths is not defined, it will give errors
             print("used for creating augmented images")
             paths = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.queries_paths= paths
             self.database_paths = paths
+            
         elif val and args.use_val_augments and dataset_name !="nordland":
+            # Loading the saved augmented validation images.
             assert os.path.exists(join(args.val_save_dir,args.dataset_name)), f" no augmented versions found for this dataset"
-            
-            if val and indices.all()!=None and (dataset_name=="amstertime" or dataset_name=="sped"):
-                print(f"using val and indices for small datasets")
-                query_indices=list(indices)
-                query_paths= sorted(glob(join(args.val_save_dir,args.dataset_name, "**", "*.jpg"), recursive=True))
-                print(f"{len(query_paths)} queries found augmented")
-                paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
-                self.queries_paths = list(compress( query_paths,query_indices))
-                self.database_paths = paths
-            else:
-                query_indices=list(indices)
-                
-                query_paths= sorted(glob(join(args.val_save_dir,args.dataset_name, "**", "*.jpg"), recursive=True))
-                print(f"{len(query_paths)} queries found augmented")
-                paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
-                self.queries_paths = list(compress( query_paths,query_indices))
-                self.database_paths = paths
-        elif val and indices.all()!=None and (dataset_name=="amstertime" or dataset_name=="sped"):
-            print(f"using val and indices for amstertime")
+            print(f"using val and indices for small datasets")
             query_indices=list(indices)
-            paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
-            self.queries_paths = list(compress( paths,query_indices))
-            self.database_paths = paths
             
+            query_paths= sorted(glob(join(args.val_save_dir,args.dataset_name, "**", "*.jpg"), recursive=True))
+            print(f"{len(query_paths)} queries found augmented")
+            self.queries_paths = list(compress( query_paths,query_indices))
+            
+            paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
+            self.database_paths = paths
+         
         elif val and indices.all()!=None and dataset_name=="nordland":
+            # to prove our fine-tuning, we use part of the test query set as validation, which is selected here
             print(f"Using part of the Nordland queries for evaluation to prove the fine tuning we designed")
             queries_folder= join(self.dataset_folder, "queries")
             if not os.path.exists(queries_folder):
                 raise FileNotFoundError(f"Folder {queries_folder} does not exist")
-            
-            
             query_indices=list(indices)
             
-            paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             queries_paths=sorted(glob(join(queries_folder,"**","*.jpg"),recursive=True)) 
             self.queries_paths = list(compress( queries_paths,query_indices))
+            
+            paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.database_paths =paths
             
-        elif val and indices.all()!=None and dataset_name!="amstertime" and dataset_name!="sped":
-            print(f"using val and indices for other")
-            
+        elif val and indices.all()!=None :
+            # using random data augmentations during validation, NOT RECOMMENDED as it results in noisy validation recalls
+            print(f"using part of database images as validation set")
             query_indices=list(indices)
             
             paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.queries_paths = list(compress( paths,query_indices))
             self.database_paths = paths
-            
+
         elif (not val) and indices.all()!=None:
+            # This is used to select the images to be used to construct triplets, the indices used here is a inverse of the indices used for validation, so no overlap is present
             print('triplets, with other indices') 
             indices=list(indices)
+            
             paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.queries_paths = list(compress( paths,indices))
             self.database_paths = list(compress( paths,indices))
             
-        
         else:
+            # fail save, if the settings were not set correctly, both the queries and database images are just the database images of the dataset
             print('you did not do good')
             self.queries_paths = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.database_paths = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             
-#         np.random.shuffle(self.database_paths)
-#         self.queries_paths=self.database_paths
-#         self.database_paths=self.database_paths
-        
+            
         # The format must be path/to/file/@utm_easting@utm_northing@...@.jpg
         self.database_utms = np.array([(path.split("@")[1], path.split("@")[2]) for path in self.database_paths]).astype(float)
         self.queries_utms = np.array([(path.split("@")[1], path.split("@")[2]) for path in self.queries_paths]).astype(float)
@@ -158,24 +147,12 @@ class RefDataset(data.Dataset):
         # Find soft_positives_per_query, which are within val_positive_dist_threshold (deafult 25 meters)
         knn = NearestNeighbors(n_jobs=-1)
         knn.fit(self.database_utms)
-#         if val:
-            
-#             self.soft_positives_per_query = knn.radius_neighbors(self.queries_utms,
-#                                                                  radius=25,
-#                                                                  return_distance=False)
-#         else:
+        
         self.soft_positives_per_query = knn.radius_neighbors(self.queries_utms,
                                                          radius=25,
                                                          return_distance=False)
         
         self.images_paths = list(self.database_paths) + list(self.queries_paths)
-#         queries_without_any_hard_positive = np.where(np.array([len(p) for p in self.soft_positives_per_query], dtype=object) == 0)[0]
-#         if len(queries_without_any_hard_positive) != 0:
-#             logging.info(f"There are {len(queries_without_any_hard_positive)} queries without any positives " +
-#                          "within the training set. They won't be considered as they're useless for training.")
-#             print(f"There are {len(queries_without_any_hard_positive)} queries without any positives " +
-#                          "within the training set. They won't be considered as they're useless for training.")
-
         
         self.database_num = len(self.database_paths)
         self.queries_num = len(self.queries_paths)
@@ -257,25 +234,7 @@ class TripletsDataset(RefDataset):
         self.images_paths = list(self.database_paths) + list(self.queries_paths)
         self.queries_num = len(self.queries_paths)
         
-        # msls_weighted refers to the mining presented in MSLS paper's supplementary.
-        # Basically, images from uncommon domains are sampled more often. Works only with MSLS dataset.
-        if self.mining == "msls_weighted":
-            notes = [p.split("@")[-2] for p in self.queries_paths]
-            try:
-                night_indexes = np.where(np.array([n.split("_")[0] == "night" for n in notes]))[0]
-                sideways_indexes = np.where(np.array([n.split("_")[1] == "sideways" for n in notes]))[0]
-            except IndexError:
-                raise RuntimeError("You're using msls_weighted mining but this dataset " +
-                                   "does not have night/sideways information. Are you using Mapillary SLS?")
-            self.weights = np.ones(self.queries_num)
-            assert len(night_indexes) != 0 and len(sideways_indexes) != 0, \
-                "There should be night and sideways images for msls_weighted mining, but there are none. Are you using Mapillary SLS?"
-            self.weights[night_indexes] += self.queries_num / len(night_indexes)
-            self.weights[sideways_indexes] += self.queries_num / len(sideways_indexes)
-            self.weights /= self.weights.sum()
-            logging.info(f"#sideways_indexes [{len(sideways_indexes)}/{self.queries_num}]; " +
-                         "#night_indexes; [{len(night_indexes)}/{self.queries_num}]")
-    
+        
     def __getitem__(self, index):
         if self.is_inference:
             # At inference time return the single image. This is used for caching or computing NetVLAD's clusters
@@ -302,7 +261,7 @@ class TripletsDataset(RefDataset):
         self.is_inference = True
         if self.mining == "full":
             self.compute_triplets_full(args, model)
-        elif self.mining == "partial" or self.mining == "msls_weighted":
+        elif self.mining == "partial":
             self.compute_triplets_partial(args, model)
         elif self.mining == "random":
             self.compute_triplets_random(args, model)
@@ -413,10 +372,7 @@ class TripletsDataset(RefDataset):
     def compute_triplets_partial(self, args, model):
         self.triplets_global_indexes = []
         # Take 1000 random queries
-        if self.mining == "partial":
-            sampled_queries_indexes = np.random.choice(self.queries_num, args.cache_refresh_rate, replace=False)
-        elif self.mining == "msls_weighted":  # Pick night and sideways queries with higher probability
-            sampled_queries_indexes = np.random.choice(self.queries_num, args.cache_refresh_rate, replace=False, p=self.weights)
+        sampled_queries_indexes = np.random.choice(self.queries_num, args.cache_refresh_rate, replace=False)
         
         # Sample 1000 random database images for the negatives
         sampled_database_indexes = np.random.choice(self.database_num, self.neg_samples_num, replace=False)
@@ -447,7 +403,7 @@ class TripletsDataset(RefDataset):
 
         
 class TripletsDataset_rerank(RefDataset):
-    """Dataset used for training, it is used to compute the triplets
+    """Dataset used for training for a method with local feature reranking (SelaVPR), it is used to compute the triplets
     with TripletsDataset.compute_triplets() with various mining methods.
     If is_inference == True, uses methods of the parent class BaseDataset,
     this is used for example when computing the cache, because we compute features
@@ -499,25 +455,6 @@ class TripletsDataset_rerank(RefDataset):
         self.images_paths = list(self.database_paths) + list(self.queries_paths)
         self.queries_num = len(self.queries_paths)
         
-        # msls_weighted refers to the mining presented in MSLS paper's supplementary.
-        # Basically, images from uncommon domains are sampled more often. Works only with MSLS dataset.
-        if self.mining == "msls_weighted":
-            notes = [p.split("@")[-2] for p in self.queries_paths]
-            try:
-                night_indexes = np.where(np.array([n.split("_")[0] == "night" for n in notes]))[0]
-                sideways_indexes = np.where(np.array([n.split("_")[1] == "sideways" for n in notes]))[0]
-            except IndexError:
-                raise RuntimeError("You're using msls_weighted mining but this dataset " +
-                                   "does not have night/sideways information. Are you using Mapillary SLS?")
-            self.weights = np.ones(self.queries_num)
-            assert len(night_indexes) != 0 and len(sideways_indexes) != 0, \
-                "There should be night and sideways images for msls_weighted mining, but there are none. Are you using Mapillary SLS?"
-            self.weights[night_indexes] += self.queries_num / len(night_indexes)
-            self.weights[sideways_indexes] += self.queries_num / len(sideways_indexes)
-            self.weights /= self.weights.sum()
-            logging.info(f"#sideways_indexes [{len(sideways_indexes)}/{self.queries_num}]; " +
-                         "#night_indexes; [{len(night_indexes)}/{self.queries_num}]")
-    
     def __getitem__(self, index):
         if self.is_inference:
             # At inference time return the single image. This is used for caching or computing NetVLAD's clusters
@@ -544,7 +481,7 @@ class TripletsDataset_rerank(RefDataset):
         self.is_inference = True
         if self.mining == "full":
             self.compute_triplets_full(args, model)
-        elif self.mining == "partial" or self.mining == "msls_weighted":
+        elif self.mining == "partial":
             self.compute_triplets_partial(args, model)
         elif self.mining == "random":
             self.compute_triplets_random(args, model)
@@ -666,10 +603,8 @@ class TripletsDataset_rerank(RefDataset):
     def compute_triplets_partial(self, args, model):
         self.triplets_global_indexes = []
         # Take 1000 random queries
-        if self.mining == "partial":
-            sampled_queries_indexes = np.random.choice(self.queries_num, args.cache_refresh_rate, replace=False)
-        elif self.mining == "msls_weighted":  # Pick night and sideways queries with higher probability
-            sampled_queries_indexes = np.random.choice(self.queries_num, args.cache_refresh_rate, replace=False, p=self.weights)
+        sampled_queries_indexes = np.random.choice(self.queries_num, args.cache_refresh_rate, replace=False)
+       
         
         # Sample 1000 random database images for the negatives
         sampled_database_indexes = np.random.choice(self.database_num, self.neg_samples_num, replace=False)
@@ -702,6 +637,9 @@ class TripletsDataset_rerank(RefDataset):
 class MSLRefs_dataset(data.Dataset):
     """Dataset with images from reference database, can be used to train the model using the Multi similarity loss.
     """
+    # Setup for code to use with online triplet mining in combination with multi similarity loss
+    # did not finish this code and it is not usable yet
+    
     def __init__(self,args, datasets_folder="datasets", dataset_name="pitts30k", split="train",ref_query_split=0.1,indices=None,val=True,batch_size=1000):
         super().__init__()
         self.val=val
