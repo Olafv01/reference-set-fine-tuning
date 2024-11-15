@@ -73,8 +73,36 @@ args.is_trainref = False
 args.is_best=False
 
 # Loading models, and setting the settings to fit the predefined model settings, such as feature dim and image size selaVPR relies on both the selavpr git repo and on vpr evaluation git repo
- 
-if args.method=="boq":
+if args.method=="sela":
+    
+    sys.path.append("SelaVPR")
+    import SelaVPR.test as sela_test
+    from SelaVPR.local_matching import local_sim
+    from loss import LocalFeatureLoss
+    import vpr_models.SelaVPR
+    from vpr_models import get_model
+    args.dense_feature_map_size=[61,61,128]
+    args.image_size=[224,224]
+    args.features_dim=1024
+    args.foundation_model_path=None
+    model=network.GeoLocalizationNet(args)
+    model = model.to(args.device)
+    
+    rerank , model= vpr_models.SelaVPR.get_model(args)
+    model.cuda()
+
+    new_state=torch.load(args.resume)
+    if new_state!=None:
+        state_dict=new_state
+        if "model_state_dict" in state_dict.keys():
+                    state_dict=state_dict["model_state_dict"]
+
+        model.load_state_dict(state_dict)
+        logging.info("model on {} loaded!".format(args.resume))
+    else:
+        logging.info("No new state defined")
+        
+elif args.method=="boq":
     if args.backbone not in [None, "DINOv2","ResNet50"]:
         raise ValueError("When using BOQ the backbone must be None or resnet50 or Dinov2")
     if args.backbone is None:
@@ -185,14 +213,17 @@ else:
 
 
 
-
-logging.info("creating triplets")
-triplets_ds=datasets_ws.TripletsDataset(args, datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split="test", negs_num_per_query=args.negs_num_per_query,ref_query_split=0.01,indices=train_mask)
+if args.method=="sela":
+    logging.info("creating triplets for sela")
+    triplets_ds=datasets_ws.TripletsDataset_rerank(args, datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split="test", negs_num_per_query=args.negs_num_per_query,ref_query_split=0.01,indices=train_mask)
+else:
+    logging.info("creating triplets for boq or crica")
+    triplets_ds=datasets_ws.TripletsDataset(args, datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split="test", negs_num_per_query=args.negs_num_per_query,ref_query_split=0.01,indices=train_mask)
     
 model = model.cuda()
 model = model.train()
 
-args.queries_per_epoch=triplets_ds.queries_num if args.queries_per_epoch == None else args.queries_per_epoch
+args.queries_per_epoch=triplets_ds.queries_num if args.queries_per_epoch == -1 else args.queries_per_epoch
 args.cache_refresh_rate=args.queries_per_epoch
 args.log_frequency= args.log_frequency if args.queries_per_epoch >args.log_frequency else args.queries_per_epoch
 
@@ -202,6 +233,8 @@ assert args.log_frequency / args.train_batch_size == int(args.log_frequency / ar
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 GlobalTriplet = nn.TripletMarginLoss(margin=args.margin, p=2, reduction="sum")
 
+if args.method == "sela":
+    MNNLocalFeatureLoss = LocalFeatureLoss().to(args.device)
 
 if args.method=="boq":
     model=boq_output_only_model(model)
@@ -255,11 +288,15 @@ if 'finetuned' not in args.resume:
                 
     logging.info(f"the results will be save to {save_dir}/logfile{filename}")
     
-    
-   recalls, recalls_str = test.val(args, val_ds, model)
-   logging.info(recalls)
-
-   test_1,test_str = test.test(args, test_ds, model)
+    if args.method=="sela":
+        recalls, recalls_str = sela_test.vervang_vooreigen(args, val_ds, model)
+        logging.info(recalls)
+        test_1, _ = sela_test.vervang_vooreigen(args, test_ds, model)
+    else:
+       recalls, recalls_str = test.val(args, val_ds, model)
+       logging.info(recalls)
+        
+       test_1,test_str = test.test(args, test_ds, model)
 
     best_r5=recalls[1]
     previous_best=best_r5
@@ -323,8 +360,10 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
             images[0]=combining_methods(images[0])
 
         # Compute features of all images (images contains queries, positives and negatives)
-        
-        global_features = model(images.to(args.device))
+        if args.method=="sela":
+            local_features, global_features = model(images.to(args.device))
+        else:
+            global_features = model(images.to(args.device))
             
         total_loss = 0
         global_loss = 0
@@ -340,10 +379,22 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
                                               global_features[negatives_indexes])
             global_loss /= (args.train_batch_size * args.negs_num_per_query)
 
+            if args.method=="sela":
+                local_loss += MNNLocalFeatureLoss([local_features[queries_indexes],
+                                              local_features[positives_indexes],
+                                              local_features[negatives_indexes]])
+                local_loss /= (args.train_batch_size * args.negs_num_per_query)
+
+
+
         total_loss = global_loss #+ local_loss 
 
         del global_features
-        
+        if args.method=="sela":
+            del local_features
+# #             try: del local_features 
+# #             except: 1
+
         optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()
@@ -351,7 +402,10 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
         batch_loss = total_loss.item()
         epoch_losses = np.append(epoch_losses, batch_loss)
         del total_loss
-        
+
+#         logging.debug(f"global loss = {global_loss.item():.6f},  ")
+#         if args.method == "sela":
+#             logging.debug(f"local loss = {local_loss.item():.6f},  ")   
         if (i % (args.log_frequency/args.train_batch_size)==0 and i!=0) or (args.queries_per_epoch==args.log_frequency and int(i)==int(args.queries_per_epoch/args.train_batch_size)-1):
 
             losses.append(epoch_losses)   
@@ -361,9 +415,12 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
             args.is_trainref=True
             model = model.eval()
 
-            recalls, recalls_str = test.val(args,val_ds, model)
+            if args.method=="sela":
+                recalls, recalls_str = sela_test.vervang_vooreigen(args, val_ds, model)
+            else:
+                recalls, recalls_str = test.val(args,val_ds, model)
             
-            logging.info(f"Final recalls on val set {val_ds}: {recalls_str}")
+            logging.info(f"Final recalls on val set {val_ds}, with reranknum {args.rerank_num}: {recalls_str}")
             prev_best=best_r5
             
             args.is_best=recalls[1]>best_r5
@@ -382,7 +439,11 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
                         not_improved_num+=1
 
             logging.info(f"Finetuned:  best R@5 = {prev_best:.1f}, current R@5 = {(recalls[1]):.1f}, not improved for {not_improved_num}")
-            test_best,test_str = test.test(args,test_ds, model)
+            
+            if args.method=="sela":
+                test_best, test_str = sela_test.vervang_vooreigen(args, test_ds, model)
+            else:
+               test_best,test_str = test.test(args,test_ds, model)
 
             all_recalls.append(recalls)
 
@@ -391,7 +452,7 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
             best_epoch_nums.append(best_epoch_num)
             best_epoch_log_nums.append(best_epoch_log_num)
 
-            logging.info(f"Final recalls on test set {test_ds}: {test_str}")
+            logging.info(f"Final recalls on test set {test_ds}, with reranknum {args.rerank_num}: {test_str}")
 
             times_per_epoch.append(datetime.now() - epoch_start_time)
             times_per_loop.append(datetime.now() - loop_start_time)

@@ -13,7 +13,7 @@ def parse_arguments(arguments=[]):
     parser.add_argument("--dataset_name", type=str, required=True,
                         help="...")
     parser.add_argument("--method",type=str,default="crica",
-                        help="name of the method to use",choices=["salad","sela","boq","crica"])
+                        help="name of the method to use",choices=["salad","boq","crica"])
     parser.add_argument("--num_workers", type=int, default=6,
                         help="_")
     parser.add_argument("--train_batch_size", type=int, default=16,
@@ -39,7 +39,7 @@ def parse_arguments(arguments=[]):
     
     parser.add_argument("--resume",type=str,default="weights/gsv_crica.pth",
                         help="Currently not used, neeeds to be defined to create sublog folder to store results")
-    parser.add_argument("--queries_per_epoch",type=int,default=-1,
+    parser.add_argument("--queries_per_epoch",type=int,default=None,
                         help="How much queries to use per epoch, if set to -1, the whole reference database will be used each epoch")
     parser.add_argument("--patience",type=int,default=5,
                         help="Early stopping patience, stop after so much epochs without improvement of R@1 for the validation set (NOT IMPLEMENTED)")
@@ -73,16 +73,9 @@ def parse_arguments(arguments=[]):
     parser.add_argument("--backbone", type=str, default=None,
                         choices=[None, "VGG16", "ResNet18", "ResNet50", "ResNet101", "ResNet152"],
                         help="_")
-    parser.add_argument("--registers", action='store_true', help="Required args variable to initiate the SelaVPR model")
-                        
-    parser.add_argument("--rerank_num", type=int, default=100,
-                        help="amount of database images to rerank default 100.")
     
     parser.add_argument("--descriptors_dimension", type=int, default=None,
                         help="_")
-    
-    parser.add_argument('--dense_feature_map_size', type=int, default=[61,61,128], nargs=3, 
-                        help="size of dense feature map of the selaVPR method (a 61x61 grid 128-dim local features)")
     
     parser.add_argument("--recall_values", type=int, nargs="+", default=[1, 5, 10, 20],
                         help="values for recall (e.g. recall@1, recall@5)")
@@ -104,16 +97,3 @@ def parse_arguments(arguments=[]):
         
     return args
     
-# include for SUE ENSAMBLE
-
-#     parser.add_argument("--n_features", type=int, default=100,
-#                         help="amount of features to save for each query for each method, default uses all features")
-#     parser.add_argument("--fuse_method", type=str, default="avg",
-#                         help="Select which method to use for combining the different models, avg for average of all L2 distances, SUE-avg for SUE weighted L2 distances, SUE-max for most confident method only", choices=["avg","SUE-avg","SUE-max"])
-
-#     parser.add_argument("--method_pths", type=str, nargs="+", default=None, help="use this if finetuned models should be used")
-    
-#     parser.add_argument("--methods", type=str, nargs="+", default=None, help="use this if youre lazy and what one finetuned model of each method", choices=["boq", "sela", "crica"])
-    
-#     parser.add_argument("--method_folder", type=str, default="weights", required=True,
-#                         help="Place where the state dicts are stored")
