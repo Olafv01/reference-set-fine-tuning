@@ -19,8 +19,20 @@ base_transform = T.Compose([
     T.ToTensor(),
     T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
+
+base_transform_gray=T.Compose([
+    T.ToTensor(),
+    T.Grayscale(num_output_channels=3),
+    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    
+])
+
 val_augment_transform = T.Compose([
     T.ToTensor(),
+])
+val_augment_transform_gray = T.Compose([
+    T.ToTensor(),
+    T.Grayscale(num_output_channels=3),
 ])
 
 def path_to_pil_img(path):
@@ -54,7 +66,7 @@ def collate_fn(batch):
 class RefDataset(data.Dataset):
     """Dataset with images from database and queries, used for inference (testing and building cache).
     """
-    def __init__(self,args, datasets_folder="datasets", dataset_name="pitts30k", split="train",indices=None,val=True):
+    def __init__(self,args, datasets_folder="datasets", dataset_name="pitts30k", split="train",indices=np.array([None]),val=True,grayscale=False):
         super().__init__()
         self.val=val
         if val:
@@ -63,6 +75,16 @@ class RefDataset(data.Dataset):
             self.use_val_augments=False
             
         args.triplets=False
+        self.grayscale=grayscale
+        if self.grayscale:
+            print("using gray images")
+            self.base_transform=base_transform_gray
+            self.val_augment_transform=val_augment_transform_gray
+        else:
+            
+            self.base_transform=base_transform
+            self.val_augment_transform=val_augment_transform
+            
         
         self.dataset_name = dataset_name
         self.dataset_folder = join(datasets_folder, dataset_name, split)
@@ -88,7 +110,7 @@ class RefDataset(data.Dataset):
             self.queries_paths= paths
             self.database_paths = paths
             
-        elif val and args.use_val_augments and dataset_name !="nordland":
+        elif val and args.use_val_augments and ((dataset_name !="nordland" and not args.ablation) or args.ablation_nordland):
             # Loading the saved augmented validation images.
             assert os.path.exists(join(args.val_save_dir,args.dataset_name)), f" no augmented versions found for this dataset"
             print(f"using val and indices for small datasets")
@@ -101,7 +123,7 @@ class RefDataset(data.Dataset):
             paths=sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
             self.database_paths = paths
          
-        elif val and indices.all()!=None and dataset_name=="nordland":
+        elif val and indices.all()!=None and (dataset_name=="nordland" or args.ablation and not args.ablation_nordland):
             # to prove our fine-tuning, we use part of the test query set as validation, which is selected here
             print(f"Using part of the Nordland queries for evaluation to prove the fine tuning we designed")
             queries_folder= join(self.dataset_folder, "queries")
@@ -149,8 +171,17 @@ class RefDataset(data.Dataset):
         knn.fit(self.database_utms)
         
         self.soft_positives_per_query = knn.radius_neighbors(self.queries_utms,
-                                                         radius=25,
+                                                         radius=args.val_positive_dist_threshold,
                                                          return_distance=False)
+        if val:
+            num_softpositives=[]
+            for softs in self.soft_positives_per_query:
+                num_softpositives.append(len(softs))
+                
+               
+                
+            num_softpositives=np.array(num_softpositives)
+            print(f"the queries had an average of {np.mean(num_softpositives)}, with an standard deviation of {np.std(num_softpositives)}.")
         
         self.images_paths = list(self.database_paths) + list(self.queries_paths)
         
@@ -161,11 +192,11 @@ class RefDataset(data.Dataset):
                       
         img = path_to_pil_img(self.images_paths[index])
         if self.val and self.use_val_augments and index >=len(self.database_paths):
-            img = val_augment_transform(img)
+            img = self.val_augment_transform(img)
             img = T.functional.resize(img, self.resize,antialias=True)
             img.to(torch.float64)
         else:
-            img = base_transform(img)
+            img = self.base_transform(img)
             #With database images self.test_method should always be "hard_resize"
             img = T.functional.resize(img, self.resize,antialias=True)
         
@@ -188,8 +219,8 @@ class TripletsDataset(RefDataset):
     this is used for example when computing the cache, because we compute features
     of each image, not triplets.
     """
-    def __init__(self, args, datasets_folder="datasets", dataset_name="pitts30k", split="train", negs_num_per_query=2,indices=None):
-        super().__init__(args, datasets_folder, dataset_name, split,indices=indices,val=False)
+    def __init__(self, args, datasets_folder="datasets", dataset_name="pitts30k", split="train", negs_num_per_query=2,indices=np.array([None]),grayscale=False):
+        super().__init__(args, datasets_folder, dataset_name, split,indices=indices,val=False,grayscale=grayscale)
         self.mining = args.mining
         self.neg_samples_num = args.neg_samples_num if self.database_num>args.neg_samples_num else self.database_num # Number of negatives to randomly sample
         self.negs_num_per_query = negs_num_per_query  # Number of negatives per query in each batch
@@ -200,25 +231,39 @@ class TripletsDataset(RefDataset):
         identity_transform = T.Lambda(lambda x: x)
         self.resized_transform = T.Compose([
             T.Resize(self.resize,antialias=True) if self.resize is not None else identity_transform,
-            base_transform
+            self.base_transform
         ])
         
         self.query_transform = T.Compose([
                 self.resized_transform,
         ])
         
-        # Find hard_positives_per_query, which are within train_positives_dist_threshold (10 meters)
+        # Find hard_positives_per_query, which are within train_positives_dist_threshold (10/25 meters)
         knn = NearestNeighbors(n_jobs=-1)
         knn.fit(self.database_utms)
         self.hard_positives_per_query = list(knn.radius_neighbors(self.queries_utms,
-                                             radius=args.train_positives_dist_threshold,  # 10 meters
+                                             radius=args.train_positives_dist_threshold,  # 10/25 meters
                                              return_distance=False))
+        num_hardpositives=[]
         
         for i in range(len(self.hard_positives_per_query)):
+            num_hardpositives.append(len(self.hard_positives_per_query[i]))
             if len(self.hard_positives_per_query[i])>1:
-                self.hard_positives_per_query[i]= np.delete(self.hard_positives_per_query[i],np.where(self.hard_positives_per_query[i] == i))
+                if args.exact_match:
+                    self.hard_positives_per_query[i]= self.hard_positives_per_query[i][np.where(self.hard_positives_per_query[i] == i)]
+                else:
+                    self.hard_positives_per_query[i]= np.delete( self.hard_positives_per_query[i], np.where(self.hard_positives_per_query[i] == i))
+               
+            
         
         #### Some queries might have no positive, we should remove those queries.
+        
+        num_hardpositives=np.array(num_hardpositives)
+        
+        self.num_hardpositives=num_hardpositives
+        self.avg_hardpositives=np.mean(num_hardpositives)
+        self.std_hardpositives=np.std(num_hardpositives)
+        print(f"the positives had an average of {np.mean(num_hardpositives)}, with an standard deviation of {np.std(num_hardpositives)}.")
         queries_without_any_hard_positive = np.where(np.array([len(p) for p in self.hard_positives_per_query], dtype=object) == 0)[0]
         if len(queries_without_any_hard_positive) != 0:
             logging.info(f"There are {len(queries_without_any_hard_positive)} queries without any positives " +
@@ -455,7 +500,7 @@ class BaseDataset(data.Dataset):
         knn.fit(self.database_utms)
         if split=="train":
             self.soft_positives_per_query = knn.radius_neighbors(self.queries_utms, 
-                                                                radius=25,
+                                                                radius=args.train_positve_dist_threshold,
                                                                 return_distance=False)
         else:
             self.soft_positives_per_query = knn.radius_neighbors(self.queries_utms, 
@@ -465,6 +510,20 @@ class BaseDataset(data.Dataset):
         
         self.database_num = len(self.database_paths)
         self.queries_num  = len(self.queries_paths)
+        
+        num_softpositives=[]
+        for i in range(len(self.soft_positives_per_query)):
+            num_softpositives.append(len(self.soft_positives_per_query[i]))
+            
+            
+        
+        #### Some queries might have no positive, we should remove those queries.
+        
+        num_softpositives=np.array(num_softpositives)
+        self.num_softpositives=num_softpositives
+        self.avg_softpositives=np.mean(num_softpositives)
+        self.std_softpositives=np.std(num_softpositives)
+        
     
     def __getitem__(self, index):
         img = path_to_pil_img(self.images_paths[index])

@@ -3,7 +3,7 @@ import faiss
 import torch
 import logging
 import numpy as np
-from SUE_ensamble.utils import combining_methods
+from util import combining_methods
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset

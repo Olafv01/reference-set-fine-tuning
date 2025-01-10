@@ -1,8 +1,8 @@
 import sys
 
-from SUE_ensamble import test,datasets_ws
-from SUE_ensamble.parser import parse_arguments
-from SUE_ensamble.utils import combining_methods, boq_output_only_model
+import test,datasets_ws
+from parser import parse_arguments
+from util import combining_methods, boq_output_only_model
 
 from datetime import datetime
 import math
@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
 import torchvision.transforms as transforms
 import torch.nn as nn
+from torch.optim.lr_scheduler import StepLR
 import faiss 
 import kornia
 
@@ -71,6 +72,7 @@ torch.manual_seed(args.seed)
 args.ckpnt_path=None
 args.is_trainref = False
 args.is_best=False
+args.finish_epochs=False
 
 # Loading models, and setting the settings to fit the predefined model settings, such as feature dim and image size selaVPR relies on both the selavpr git repo and on vpr evaluation git repo
  
@@ -120,7 +122,9 @@ if args.image_size!=None:
 
     
 #if another finetuned file is used, everything is copied and started from a different starting point
-if 'finetuned' in args.resume:
+if args.resume== None:
+    args.resume=""
+elif 'finetuned' in args.resume:
     og_resume=args.resume
     add_epochs=args.epochs_num
     filename=args.resume.split('/')[-1]
@@ -147,47 +151,53 @@ if 'finetuned' in args.resume:
     best_r5 = max(best_recalls)
     if "times_per_loop" in resume_logfile.keys():
         times_per_loop = resume_logfile["times_per_loop"]
+elif args.resume != None:
+    logging.info(f"loaded different model starting point from {args.resume}.")
+    state_dict=torch.load(args.resume)["state_dict"]
+    model.load_state_dict(state_dict)
+    model.cuda()
+    model.eval()
     
-database_folder= join("datasets_vg/datasets",args.dataset_name,"test","database")
+database_folder= join(args.datasets_folder,args.dataset_name,"test","database")
 if not os.path.exists(database_folder):
-    database_folder= join("datasets_vg/datasets",args.dataset_name,"images","test","database")
+    database_folder= join(args.datasets_folder,args.dataset_name,"images","test","database")
 
 listdata = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
-
-
-
-"""For Nordland dataset, we select the final 10% of test queries to use as validation set"""    
-if args.dataset_name=="nordland":
-    train_mask=np.ones(len(listdata),dtype=bool)
-    train_mask[:int(0.3*(len(train_mask)))]=False
+train_mask=np.ones(len(listdata),dtype=bool)
+train_mask[:int(args.val_split*(len(train_mask)))]=False
+if args.random_vals:
     np.random.shuffle(train_mask)
     
-    queries_folder= join("datasets_vg/datasets",args.dataset_name,"test","queries")
+val_mask=~train_mask
+
+
+"""For Nordland dataset, we select the final 10% of test queries to use as validation set"""
+
+if (args.dataset_name=="nordland" or args.ablation) and not args.ablation_nordland:
+        
+    queries_folder= join(args.datasets_folder,args.dataset_name,"test","queries")
     if not os.path.exists(queries_folder):
-        queries_folder= join("datasets_vg/datasets",args.dataset_name,"images","test","queries")
+        queries_folder= join(args.datasets_folder,args.dataset_name,"images","test","queries")
     
     listdata = sorted(glob(join(queries_folder, "**", "*.jpg"), recursive=True))
-    mask=np.zeros(len(listdata),dtype=bool)
-    mask[int(0.9*(len(mask))):]=True
+    val_mask_nordland=np.zeros(len(listdata),dtype=bool)
+    val_mask_nordland[int((1-args.test_val_queries)*(len(val_mask_nordland))):]=True
     
-    val_ds=datasets_ws.RefDataset(args,datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split='test', indices=mask, val=True)
-    test_ds=datasets_ws.RefDataset(args,datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split='test', indices=~mask, val=True)
+    val_ds=datasets_ws.RefDataset(args,datasets_folder=args.datasets_folder, dataset_name=args.dataset_name, split='test', indices=val_mask_nordland, val=True,grayscale=args.grayscale)
+    test_ds=datasets_ws.RefDataset(args,datasets_folder=args.datasets_folder, dataset_name=args.dataset_name, split='test', indices=~val_mask_nordland, val=True,grayscale=False)
     
 else:
-    ''' For the other datasets, we randomly use 30% of the database images as validation and the rest as train images '''
-    train_mask=np.ones(len(listdata),dtype=bool)
-    train_mask[:int(0.3*(len(train_mask)))]=False
-    np.random.shuffle(train_mask)
-    val_mask=~train_mask
-    val_ds=datasets_ws.RefDataset(args,datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split='test', indices=val_mask, val=True)
-    test_ds=datasets_ws.BaseDataset(args,datasets_folder="datasets_vg/datasets",dataset_name=args.dataset_name,split='test') 
+    ''' For the other datasets, we randomly use the remaining part of the database images as validation and the rest as train images '''
+    
+    val_ds=datasets_ws.RefDataset(args,datasets_folder=args.datasets_folder, dataset_name=args.dataset_name, split='test', indices=val_mask, val=True,grayscale=args.grayscale)
+    test_ds=datasets_ws.BaseDataset(args,datasets_folder=args.datasets_folder,dataset_name=args.dataset_name,split='test') 
 
 
 
 
 
 logging.info("creating triplets")
-triplets_ds=datasets_ws.TripletsDataset(args, datasets_folder="datasets_vg/datasets", dataset_name=args.dataset_name, split="test", negs_num_per_query=args.negs_num_per_query,ref_query_split=0.01,indices=train_mask)
+triplets_ds=datasets_ws.TripletsDataset(args, datasets_folder=args.datasets_folder, dataset_name=args.dataset_name, split="test", negs_num_per_query=args.negs_num_per_query, indices=train_mask,grayscale=args.grayscale)
     
 model = model.cuda()
 model = model.train()
@@ -201,7 +211,7 @@ assert args.log_frequency / args.train_batch_size == int(args.log_frequency / ar
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 GlobalTriplet = nn.TripletMarginLoss(margin=args.margin, p=2, reduction="sum")
-
+scheduler = StepLR(optimizer, step_size=args.step_lr, gamma=args.gamma_lr)
 
 if args.method=="boq":
     model=boq_output_only_model(model)
@@ -229,6 +239,8 @@ if args.create_augments:
         
         image=transforms.functional.to_pil_image(image)
         image.save(new_im_path)
+        
+    assert False, "Finished creating augmented validation images, restart script with correct settings now."
     
     
 ''' If the resume file is not a finetuned model save, but a normal model, we need to evaluate and test the model first, to known the initial performance.
@@ -236,8 +248,9 @@ Also creates the logfile in the format of
 {model_name}_finetuned_on_{test_dataset}_{learning-rate}_{run_number}.pth''' 
 
 if 'finetuned' not in args.resume:
-    save_dir=join(args.log_dir,args.resume.split(".")[0].split('/')[-1])
-    filename="{}_finetuned_on_{}_{}_.pth".format(args.resume.split(".")[0].split('/')[-1],args.dataset_name.split("/")[0],str(args.lr))
+#     save_dir=join(args.log_dir,args.resume.split(".")[0].split('/')[-1])
+    save_dir=join(args.log_dir,f"{args.original_training_data}_{args.method}")
+    filename=f"{args.original_training_data}_{args.method}_finetuned_on_{args.dataset_name.split('/')[0]}_{str(args.lr)}_.pth"
 
     os.makedirs(save_dir,exist_ok=True)
     while os.path.exists(join(save_dir,"logfile"+filename)):
@@ -256,10 +269,10 @@ if 'finetuned' not in args.resume:
     logging.info(f"the results will be save to {save_dir}/logfile{filename}")
     
     
-   recalls, recalls_str = test.val(args, val_ds, model)
-   logging.info(recalls)
+    recalls, recalls_str = test.val(args, val_ds, model)
+    logging.info(recalls)
 
-   test_1,test_str = test.test(args, test_ds, model)
+    test_1,test_str = test.test(args, test_ds, model)
 
     best_r5=recalls[1]
     previous_best=best_r5
@@ -285,6 +298,7 @@ if 'finetuned' not in args.resume:
                  
 
 model = model.eval()
+
 triplets_ds.is_inference=True
 logging.info('computing triplets')
 triplets_ds.compute_triplets(args, model)
@@ -396,11 +410,7 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
             times_per_epoch.append(datetime.now() - epoch_start_time)
             times_per_loop.append(datetime.now() - loop_start_time)
 
-            logging.info(f"Finished loop {epoch_num:02d} in {str(datetime.now() - loop_start_time)[:-7]}, "
-                         f"average epoch triplet loss = {epoch_losses.mean():.4f}")
-
             args.save_dir=save_dir
-            loop_start_time= datetime.now()
             log_path = join(save_dir, "logfile"+filename)
             state_log={"epoch_num":epoch_num, "losses":losses,"lr":args.lr, "args":args,"recalls":all_recalls,"test_set_recalls":test_recalls,"best_epoch":best_epoch_nums, "times_per_epoch":times_per_epoch, "times_per_loop":times_per_loop}
             
@@ -415,23 +425,37 @@ for epoch_num in range(start_epoch_num, args.epochs_num):
             model_state={"epoch_num": epoch_num,"best_epoch":best_epoch_num, "model_state_dict": model.state_dict(),  "all_losses":losses, "recalls":all_recalls, "test_set_recalls":test_recalls, "best_epoch":best_epoch_nums, "times_per_epoch":times_per_epoch, "times_per_loop":times_per_loop}
             # In a try statement, to prevent the script from failing due to limit storage space
             # saving model with best if it is the best model and the patience has not been passed
-            try:
-                torch.save(model_state, model_path)
-            except:
-                print(f'error during saving {model_path}, will try again next loop')
             
+            if args.is_best and args.save_models and not args.early_stopping:
+                try:
+                    torch.save(model_state, model_path)
+                except:
+                    print(f'error during saving {model_path}, will try again next loop')
+
             best_model_path = join(save_dir, "best_model_"+filename)
-            if args.is_best and not args.early_stopping:
+            if args.is_best and args.save_models and not args.early_stopping:
                 try:
                     torch.save(model_state, best_model_path)
                 except:
                     print(f'error during saving {model_path}, will try again next loop')
                 
+            logging.info(f"Finished loop {epoch_num:02d} in {str(datetime.now() - loop_start_time)[:-7]}, "
+                         f"average epoch triplet loss = {epoch_losses.mean():.4f}")
+            loop_start_time= datetime.now()
+
             if not_improved_num>args.patience:
                 args.early_stopping=True
+                if args.stop_after_patience:
+                    args.finish_epochs=True
+                    break
+                    
+            if args.scheduled_lr:
+                scheduler.step()
 
     logging.info(f"Finished epoch {epoch_num:02d} in {str(datetime.now() - epoch_start_time)[:-7]}, "
                  f"average epoch triplet loss = {epoch_losses.mean():.4f}")
+    if args.finish_epochs:
+        break
 
     
 print(args)
