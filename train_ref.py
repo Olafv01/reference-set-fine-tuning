@@ -19,7 +19,7 @@ from glob import glob
 from tqdm import tqdm
 import logging
 from os.path import join, exists
-from IPython.display import clear_output
+
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
 import torchvision.transforms as transforms
@@ -310,7 +310,7 @@ triplets_dl=torch.utils.data.DataLoader(dataset=triplets_ds, num_workers=args.nu
                                  collate_fn=datasets_ws.collate_fn,
                                  pin_memory=(args.device == "cuda"),
                                  drop_last=True)
-clear_output(wait=True)
+
 logging.info("created triplets with {} mining".format(args.mining))
 
 
